@@ -10,6 +10,33 @@ lives in the superrepo at `apps/docs/src/content/docs/`. Its Repositories page,
 `apps/docs/src/content/docs/development/repositories.md`, draws the edges
 between the repositories.
 
+## The service
+
+`crates/repos` is `tcab-repos`, an Axum server on `0.0.0.0:8792` over a private
+Azure Blob container that holds one git bundle per run:
+
+| Route | Caller | Credential |
+| --- | --- | --- |
+| `POST /runs/{id}/bundle` | The driver, uploading the run's bundle | The per-job token, with `x-tcab-job-id` |
+| `GET /runs/{id}/bundle` | The backend, serving a download | The service token |
+| `DELETE /runs/{id}/bundle` | The backend, pruning a deleted run | The service token |
+| `POST /runs/{id}/publish` | The publisher Job | The per-publish-job token, with `x-tcab-publish-job-id` |
+
+What the service must do is stated by the superrepo's
+`apps/docs/src/content/docs/components/repos/overview.md`. Its configuration is
+entirely environment variables, documented in `crates/repos/src/config.rs`.
+To run it on its own, start Azurite's Blob service, copy `.env.repos.example`
+to `.env.repos` and run:
+
+```sh
+npx azurite-blob --silent --location /tmp/azurite &
+cargo run --bin tcab-repos
+```
+
+Against Azurite the service creates its container at startup. A publish needs
+`TCAB_GITHUB_ORG` and `TCAB_GITHUB_TOKEN`, and the backend the run's record is
+read from; without them it answers `503`.
+
 ## Getting started
 
 Open the superrepo in its devcontainer, which carries every toolchain the
