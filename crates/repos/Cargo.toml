@@ -1,0 +1,15 @@
+[package]
+name = "test-cabinet-repos"
+description = "The write-through store of run implementations as git bundles, and the public push."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Take a crate of another repository up with `<crate> = { workspace = true }`;
+# the root manifest offers the ones the dependency edges permit.
