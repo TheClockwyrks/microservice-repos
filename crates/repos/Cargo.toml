@@ -7,9 +7,52 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "tcab-repos"
+path = "src/main.rs"
+
+[lib]
+name = "test_cabinet_repos"
+path = "src/lib.rs"
+
 [lints]
 workspace = true
 
 [dependencies]
-# Take a crate of another repository up with `<crate> = { workspace = true }`;
-# the root manifest offers the ones the dependency edges permit.
+# The run record a publish reads its slug, its end time and its publishability
+# from.
+test-cabinet-contracts = { workspace = true }
+# The one secret scrubber every public egress shares, run over the published tree.
+test-cabinet-redact = { workspace = true }
+# A binary owns telemetry init, so it takes the `otlp` feature, as the other
+# services' mains do.
+test-cabinet-telemetry = { workspace = true, features = ["otlp"] }
+
+axum = { workspace = true }
+# Shared Key signing and the block ids of a staged Blob upload.
+base64 = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+bytes = { workspace = true }
+dotenvy = { workspace = true }
+futures-util = { workspace = true }
+http = { workspace = true }
+# The backend's token verifies and record read, GitHub's API and the Blob store.
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# An upload is staged on disk to be checked with git, and a publish works in a
+# scratch repository.
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+# The Blob request date, and the record's end time as a commit date.
+time = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# `ServiceExt::oneshot`, to drive the router without binding a socket.
+tower = { workspace = true, features = ["util"] }
+# Decodes the query strings the stub Blob service receives.
+percent-encoding = { workspace = true }

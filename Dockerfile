@@ -33,11 +33,22 @@ RUN --mount=type=secret,id=gitconfig,target=/root/.gitconfig,required=false \
     find /src -path /src/target -prune -o -type f -exec touch {} + \
     && TCAB_BUILD_COMMIT="${TCAB_BUILD_COMMIT}" cargo build --release --locked -p test-cabinet-repos \
     && mkdir -p /out \
-    && cp target/release/test-cabinet-repos /out/
+    && cp target/release/tcab-repos /out/
 
+# The service checks an upload with `git bundle` and publishes with `git`
+# (fetch, commit-tree, push over HTTPS), so the runtime carries git and the CA
+# certificates its pushes to GitHub and its Blob and token requests verify
+# against. A bundle is staged in /tmp while it is checked and published.
 FROM docker.io/library/debian:bookworm-slim
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates \
+  && apt-get install -y --no-install-recommends ca-certificates git \
   && rm -rf /var/lib/apt/lists/*
-COPY --from=build /out/test-cabinet-repos /usr/local/bin/test-cabinet-repos
-ENTRYPOINT ["test-cabinet-repos"]
+COPY --from=build /out/tcab-repos /usr/local/bin/tcab-repos
+# An unprivileged user: the service needs its Blob identity, the backend and
+# GitHub, never host privileges.
+RUN useradd --create-home --uid 1000 repos
+USER repos
+WORKDIR /home/repos
+ENV TCAB_REPOS_BIND=0.0.0.0:8792
+EXPOSE 8792
+ENTRYPOINT ["tcab-repos"]
