@@ -63,6 +63,7 @@ with `.dockerignore` as its allowlist. On every gated push to `master` and
 `staging` the pipeline builds it natively for amd64 and arm64
 (`scripts/ci/image.sh`) and fuses the two into the multi-arch
 `testcabinet.azurecr.io/microservice-repos:<commit>` a deployment pins
-(`scripts/ci/manifest.sh`). The `build-context` gate holds every `COPY` to the
-allowlist and the Rust pin to `rust-toolchain.toml`. The kit wrote the
-`Dockerfile` once, and it is the repository's to grow.
+(`scripts/ci/manifest.sh`).
+The `build-context` gate holds every `COPY` to the allowlist and the Rust pin
+to `rust-toolchain.toml`. The kit wrote the `Dockerfile` once, and it is the
+repository's to grow.
