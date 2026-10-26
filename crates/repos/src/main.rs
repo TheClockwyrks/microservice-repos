@@ -1,5 +1,6 @@
 //! The `tcab-repos` binary: resolve the configuration from the environment,
-//! make the bundle container ready, and serve the router until terminated.
+//! make the bundle container ready, and serve the router until terminated,
+//! then drain (see [`test_cabinet_repos::drain`]).
 
 use std::process::ExitCode;
 
@@ -83,9 +84,21 @@ async fn main() -> ExitCode {
         }
     };
     tracing::info!("repos service listening on {}", service.bind);
-    if let Err(err) = axum::serve(listener, service.router).await {
+    // Told to stop, the service fails readiness at once, keeps accepting for the
+    // drain delay, then stops accepting and finishes the requests in flight
+    // before it exits (the control plane's "Graceful termination").
+    let shutdown = test_cabinet_repos::drain::drain_on(
+        test_cabinet_repos::drain::stop_requested(),
+        service.draining,
+        test_cabinet_repos::drain::DRAIN_DELAY,
+    );
+    if let Err(err) = axum::serve(listener, service.router)
+        .with_graceful_shutdown(shutdown)
+        .await
+    {
         eprintln!("server error: {err}");
         return ExitCode::FAILURE;
     }
+    tracing::info!("repos service stopped; every request in flight finished");
     ExitCode::SUCCESS
 }

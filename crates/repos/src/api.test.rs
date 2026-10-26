@@ -46,6 +46,7 @@ async fn harness() -> Harness {
             service_token: Some(Arc::new(SERVICE_TOKEN.to_string())),
             publisher: Some(Arc::new(publisher)),
             upload_limit: bundle::MAX_BUNDLE_BYTES,
+            draining: Draining::new(),
         },
         backend,
         blob,
@@ -321,6 +322,25 @@ async fn the_probes_need_no_credential() {
         let (status, _, _) = send(&h.state, Request::get(path).body(Body::empty()).unwrap()).await;
         assert_eq!(status, StatusCode::OK);
     }
+}
+
+#[tokio::test]
+async fn readiness_fails_once_draining_and_liveness_holds() {
+    let h = harness().await;
+    h.state.draining.mark();
+    let (status, body, _) = send(
+        &h.state,
+        Request::get("/readyz").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(String::from_utf8_lossy(&body).contains("draining"));
+    let (status, _, _) = send(
+        &h.state,
+        Request::get("/healthz").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[test]

@@ -21,6 +21,7 @@ use crate::auth::{
 };
 use crate::blob::{BlobClient, BlobError};
 use crate::bundle::{self, BundleError};
+use crate::drain::Draining;
 use crate::error::ApiError;
 use crate::publish::{PublishError, Publisher};
 
@@ -45,13 +46,15 @@ pub struct AppState {
     pub publisher: Option<Arc<Publisher>>,
     /// The largest upload accepted, in bytes.
     pub upload_limit: u64,
+    /// Whether the service was told to stop; `/readyz` fails once it is.
+    pub draining: Draining,
 }
 
 /// The service's router.
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
-        .route("/readyz", get(healthz))
+        .route("/readyz", get(readyz))
         .route(
             "/runs/{id}/bundle",
             post(upload).get(download).delete(delete),
@@ -72,9 +75,24 @@ async fn accept_trace(request: Request, next: axum::middleware::Next) -> Respons
     next.run(request).await
 }
 
-/// The liveness and readiness probe.
+/// The liveness probe: the process is up and serving.
 async fn healthz() -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// The readiness probe: `200` while the service takes new work, `503` from the
+/// moment it is told to stop, so its endpoint leaves the `Service` while the
+/// requests in flight finish.
+async fn readyz(State(state): State<AppState>) -> Response {
+    if state.draining.is_draining() {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({ "status": "draining" })),
+        )
+            .into_response()
+    } else {
+        axum::Json(serde_json::json!({ "status": "ok" })).into_response()
+    }
 }
 
 /// The object a run's bundle is stored as, after checking `id` is a safe name:

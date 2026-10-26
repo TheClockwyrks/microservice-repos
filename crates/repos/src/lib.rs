@@ -16,6 +16,8 @@
 //! - [`backend`]: the run record a publish reads.
 //! - [`git`]: `git`, isolated from the host's configuration.
 //! - [`config`]: the environment-sourced configuration.
+//! - [`drain`]: graceful termination, the readiness it fails and the drain
+//!   delay.
 
 pub mod api;
 pub mod auth;
@@ -23,6 +25,7 @@ pub mod backend;
 pub mod blob;
 pub mod bundle;
 pub mod config;
+pub mod drain;
 pub mod error;
 pub mod git;
 pub mod github;
@@ -36,6 +39,7 @@ use std::sync::Arc;
 use crate::api::AppState;
 use crate::blob::{BlobClient, BlobError};
 use crate::config::Config;
+use crate::drain::Draining;
 use crate::publish::Publisher;
 
 /// A wired, runnable service: the router and the address it binds.
@@ -44,6 +48,9 @@ pub struct ReposService {
     pub router: axum::Router,
     /// The bind address.
     pub bind: String,
+    /// Whether the service was told to stop, which its readiness probe answers
+    /// from; the shutdown marks it (see [`drain::drain_on`]).
+    pub draining: Draining,
 }
 
 /// Make the bundle container ready before the service serves: on an emulator,
@@ -71,6 +78,7 @@ pub fn build(config: Config) -> Result<ReposService, BlobError> {
     let publisher = config
         .github
         .map(|github| Arc::new(Publisher::new(github, http.clone())));
+    let draining = Draining::new();
     let state = AppState {
         blob,
         http,
@@ -78,9 +86,11 @@ pub fn build(config: Config) -> Result<ReposService, BlobError> {
         service_token: config.service_token.map(Arc::new),
         publisher,
         upload_limit: bundle::MAX_BUNDLE_BYTES,
+        draining: draining.clone(),
     };
     Ok(ReposService {
         router: api::router(state),
         bind: config.bind,
+        draining,
     })
 }
