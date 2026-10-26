@@ -17,7 +17,8 @@ accordingly.
   govern each.
 - This repository documents its own code with rustdoc and its README. It
   never restates what the documentation site states; it links the page.
-- Issues are filed on the superrepo's one board, `../tasks/`, never here.
+- Issues are filed on the superrepo's one board, through its issues server,
+  never here.
 
 ## Repository layout
 
