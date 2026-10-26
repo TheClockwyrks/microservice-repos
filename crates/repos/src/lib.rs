@@ -49,7 +49,7 @@ pub struct ReposService {
     /// The bind address.
     pub bind: String,
     /// Whether the service was told to stop, which its readiness probe answers
-    /// from; the shutdown marks it (see [`drain::drain_on`]).
+    /// from; the shutdown marks it (see [`drain::serve`]).
     pub draining: Draining,
 }
 

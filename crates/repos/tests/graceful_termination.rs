@@ -43,6 +43,11 @@ struct Seen {
     verifies: Vec<String>,
     /// The blobs the stub Blob service holds, by path.
     blobs: BTreeMap<String, Bytes>,
+    /// How many requests the stub Blob service received.
+    blob_requests: usize,
+    /// Whether the stub Blob service answers every request `503`, as a store
+    /// still coming up does.
+    blob_unavailable: bool,
 }
 
 type Shared = Arc<Mutex<Seen>>;
@@ -77,6 +82,13 @@ async fn serve_backend(seen: Shared) -> String {
 async fn serve_blob(seen: Shared) -> String {
     async fn blob(State(seen): State<Shared>, method: Method, uri: Uri, body: Bytes) -> StatusCode {
         let query = uri.query().unwrap_or("");
+        {
+            let mut seen = seen.lock().unwrap();
+            seen.blob_requests += 1;
+            if seen.blob_unavailable {
+                return StatusCode::SERVICE_UNAVAILABLE;
+            }
+        }
         match (method, query.contains("restype=container")) {
             (Method::PUT, true) => StatusCode::CREATED,
             (Method::GET, true) => StatusCode::OK,
@@ -118,6 +130,17 @@ impl Drop for Service {
 impl Service {
     /// Start `tcab-repos` against the stubs and wait until it is ready.
     async fn start(backend: &str, blob: &str) -> Self {
+        let service = Self::spawn(backend, blob);
+        service
+            .wait_for("the service to become ready", |probe| {
+                probe == Probe::Status(200)
+            })
+            .await;
+        service
+    }
+
+    /// Spawn `tcab-repos` against the stubs, not waiting for it.
+    fn spawn(backend: &str, blob: &str) -> Self {
         let address = free_port();
         // A working directory of its own, so no `.env.repos` is read.
         let cwd = tempfile::tempdir().unwrap();
@@ -139,17 +162,11 @@ impl Service {
             .stdin(Stdio::null())
             .spawn()
             .unwrap();
-        let service = Self {
+        Self {
             child,
             address,
             _cwd: cwd,
-        };
-        service
-            .wait_for("the service to become ready", |probe| {
-                probe == Probe::Status(200)
-            })
-            .await;
-        service
+        }
     }
 
     /// Send the process `signal` (`TERM` or `INT`).
@@ -174,11 +191,13 @@ impl Service {
         if stream.write_all(request.as_bytes()).await.is_err() {
             return Probe::Refused;
         }
+        // A connection queued as the listener closed is reset, or closed with
+        // no answer: both mean the service no longer accepts.
         let mut response = Vec::new();
-        if stream.read_to_end(&mut response).await.is_err() || response.is_empty() {
+        if stream.read_to_end(&mut response).await.is_err() {
             return Probe::Refused;
         }
-        Probe::Status(status_of(&response))
+        status_of(&response).map_or(Probe::Refused, Probe::Status)
     }
 
     /// Probe `/readyz` until `done` holds of an answer, panicking after
@@ -211,19 +230,21 @@ impl Service {
 /// One answer of the readiness probe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Probe {
-    /// The connection was refused or dropped: the service no longer accepts.
+    /// No answer: nothing accepts on the port, or a connection queued as the
+    /// listener closed was reset or closed unanswered.
     Refused,
     /// The HTTP status it answered.
     Status(u16),
 }
 
-/// The status code of a raw HTTP/1.1 response.
-fn status_of(response: &[u8]) -> u16 {
+/// The status code of a raw HTTP/1.1 response, or `None` for no response.
+fn status_of(response: &[u8]) -> Option<u16> {
     let text = String::from_utf8_lossy(response);
-    text.split_whitespace()
-        .nth(1)
-        .and_then(|code| code.parse().ok())
-        .unwrap_or_else(|| panic!("not an HTTP response: {text}"))
+    let mut words = text.split_whitespace();
+    if !words.next()?.starts_with("HTTP/") {
+        return None;
+    }
+    words.next()?.parse().ok()
 }
 
 /// A run's repository as the driver leaves it, written with `git bundle create
@@ -298,8 +319,10 @@ async fn sigterm_fails_readiness_drains_and_finishes_an_upload_in_flight() {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 
-    service.signal("TERM");
+    // The service starts its drain delay when the signal lands, which is before
+    // `kill` returns, so the clock starts before it is sent.
     let signalled = Instant::now();
+    service.signal("TERM");
 
     // Readiness fails at once, while the service still accepts: the probe is
     // answered `503` rather than refused.
@@ -337,7 +360,7 @@ async fn sigterm_fails_readiness_drains_and_finishes_an_upload_in_flight() {
         .unwrap();
     assert_eq!(
         status_of(&response),
-        201,
+        Some(201),
         "{}",
         String::from_utf8_lossy(&response)
     );
@@ -361,12 +384,41 @@ async fn an_interrupt_skips_the_drain_delay_and_exits_cleanly() {
     let blob = serve_blob(seen).await;
     let mut service = Service::start(&backend, &blob).await;
 
-    service.signal("INT");
     let signalled = Instant::now();
+    service.signal("INT");
     let status = service.exit().await;
     assert!(status.success(), "the service exited with {status}");
     assert!(
         signalled.elapsed() < DRAIN_DELAY,
         "an interrupt waited out the drain delay"
     );
+}
+
+#[tokio::test]
+async fn a_sigterm_during_the_start_exits_cleanly() {
+    let seen = Shared::default();
+    seen.lock().unwrap().blob_unavailable = true;
+    let backend = serve_backend(seen.clone()).await;
+    let blob = serve_blob(seen.clone()).await;
+    let mut service = Service::spawn(&backend, &blob);
+
+    // The start is retrying the unavailable store, so its signal handlers are
+    // installed and its slow part is under way.
+    let deadline = Instant::now() + PATIENCE;
+    while seen.lock().unwrap().blob_requests == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the start never reached the store"
+        );
+        assert!(
+            service.child.try_wait().unwrap().is_none(),
+            "the service exited while starting"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    service.signal("TERM");
+    let status = service.exit().await;
+    assert!(status.success(), "the service exited with {status}");
+    assert_eq!(service.probe().await, Probe::Refused);
 }
